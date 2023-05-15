@@ -29,6 +29,7 @@ private[client] abstract class HiveVersionSuite(version: String) extends SparkFu
   protected var client: HiveClient = null
 
   protected def buildClient(hadoopConf: Configuration): HiveClient = {
+    hadoopConf.set("datanucleus.connectionPoolingType", "HikariCP")
     // Hive changed the default of datanucleus.schema.autoCreateAll from true to false and
     // hive.metastore.schema.verification from false to true since 2.0
     // For details, see the JIRA HIVE-6113 and HIVE-12463
