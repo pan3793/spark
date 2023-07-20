@@ -161,7 +161,8 @@ object DataSourceAnalysis extends Rule[LogicalPlan] {
       val outputPath = new Path(storage.locationUri.get)
       if (overwrite) DDLUtils.verifyNotReadPath(query, outputPath)
 
-      InsertIntoDataSourceDirCommand(storage, provider.get, query, overwrite)
+      InsertIntoDataSourceDirCommand(
+        storage, provider.get, query, overwrite, query.output.map(_.name))
 
     case i @ InsertIntoStatement(
         l @ LogicalRelation(t: HadoopFsRelation, _, table, _), parts, _, query, overwrite, _, _)

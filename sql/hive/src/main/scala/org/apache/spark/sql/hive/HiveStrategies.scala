@@ -278,7 +278,7 @@ case class RelationConversions(
         if (overwrite) DDLUtils.verifyNotReadPath(query, outputPath)
 
         InsertIntoDataSourceDirCommand(metastoreCatalog.convertStorageFormat(storage),
-          convertProvider(storage), query, overwrite)
+          convertProvider(storage), query, overwrite, query.output.map(_.name))
     }
   }
 }
