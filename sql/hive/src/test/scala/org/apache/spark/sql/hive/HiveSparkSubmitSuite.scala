@@ -376,8 +376,8 @@ class HiveSparkSubmitSuite
         "--master", "local-cluster[2,1,512]",
         "--conf", s"${EXECUTOR_MEMORY.key}=512m",
         "--conf", s"${LEGACY_TIME_PARSER_POLICY.key}=LEGACY",
-        "--conf", s"${HiveUtils.HIVE_METASTORE_VERSION.key}=1.2.1",
-        "--conf", s"${HiveUtils.HIVE_METASTORE_JARS.key}=maven",
+//        "--conf", s"${HiveUtils.HIVE_METASTORE_VERSION.key}=1.2.1",
+//        "--conf", s"${HiveUtils.HIVE_METASTORE_JARS.key}=maven",
         "--conf", s"spark.hadoop.javax.jdo.option.ConnectionURL=$metastore",
         unusedJar.toString)
       runSparkSubmit(args)
@@ -393,10 +393,10 @@ object SetMetastoreURLTest extends Logging {
     val builder = SparkSession.builder()
       .config(sparkConf)
       .config(UI_ENABLED.key, "false")
-      .config(HiveUtils.HIVE_METASTORE_VERSION.key, "0.13.1")
+//      .config(HiveUtils.HIVE_METASTORE_VERSION.key, "0.13.1")
       // The issue described in SPARK-16901 only appear when
       // spark.sql.hive.metastore.jars is not set to builtin.
-      .config(HiveUtils.HIVE_METASTORE_JARS.key, "maven")
+//      .config(HiveUtils.HIVE_METASTORE_JARS.key, "maven")
       .enableHiveSupport()
 
     val spark = builder.getOrCreate()
@@ -704,8 +704,8 @@ object SparkSQLConfTest extends Logging {
         val filteredSettings = super.getAll.filterNot(e => isMetastoreSetting(e._1))
 
         // Always add these two metastore settings at the beginning.
-        (HiveUtils.HIVE_METASTORE_VERSION.key -> "0.12") +:
-        (HiveUtils.HIVE_METASTORE_JARS.key -> "maven") +:
+//        (HiveUtils.HIVE_METASTORE_VERSION.key -> "0.12") +:
+//        (HiveUtils.HIVE_METASTORE_JARS.key -> "maven") +:
         filteredSettings
       }
 
@@ -732,8 +732,8 @@ object SPARK_9757 extends QueryTest {
     val hiveWarehouseLocation = Utils.createTempDir()
     val sparkContext = new SparkContext(
       new SparkConf()
-        .set(HiveUtils.HIVE_METASTORE_VERSION.key, "0.13.1")
-        .set(HiveUtils.HIVE_METASTORE_JARS.key, "maven")
+//        .set(HiveUtils.HIVE_METASTORE_VERSION.key, "0.13.1")
+//        .set(HiveUtils.HIVE_METASTORE_JARS.key, "maven")
         .set(UI_ENABLED, false)
         .set(WAREHOUSE_PATH.key, hiveWarehouseLocation.toString))
 

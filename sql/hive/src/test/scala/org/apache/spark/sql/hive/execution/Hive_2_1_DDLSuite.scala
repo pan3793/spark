@@ -22,7 +22,7 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.spark.{SparkConf, SparkFunSuite}
 import org.apache.spark.launcher.SparkLauncher
 import org.apache.spark.sql.AnalysisException
-import org.apache.spark.sql.hive.{HiveExternalCatalog, HiveUtils}
+import org.apache.spark.sql.hive.HiveExternalCatalog
 import org.apache.spark.sql.hive.test.TestHiveSingleton
 import org.apache.spark.sql.internal.StaticSQLConf._
 import org.apache.spark.sql.types._
@@ -47,8 +47,8 @@ class Hive_2_1_DDLSuite extends SparkFunSuite with TestHiveSingleton {
       .set(SparkLauncher.SPARK_MASTER, "local")
       .set(WAREHOUSE_PATH.key, warehouse.toURI().toString())
       .set(CATALOG_IMPLEMENTATION.key, "hive")
-      .set(HiveUtils.HIVE_METASTORE_VERSION.key, "2.1")
-      .set(HiveUtils.HIVE_METASTORE_JARS.key, "maven")
+//      .set(HiveUtils.HIVE_METASTORE_VERSION.key, "2.1")
+//      .set(HiveUtils.HIVE_METASTORE_JARS.key, "maven")
 
     val hadoopConf = new Configuration()
     hadoopConf.set("hive.metastore.warehouse.dir", warehouse.toURI().toString())
