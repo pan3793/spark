@@ -227,8 +227,8 @@ class HiveExternalCatalogVersionsSuite extends SparkSubmitTestUtils {
         "--master", "local[2]",
         "--conf", s"${UI_ENABLED.key}=false",
         "--conf", s"${MASTER_REST_SERVER_ENABLED.key}=false",
-//        "--conf", s"${HiveUtils.HIVE_METASTORE_VERSION.key}=$hiveMetastoreVersion",
-//        "--conf", s"${HiveUtils.HIVE_METASTORE_JARS.key}=maven",
+        "--conf", s"${HiveUtils.HIVE_METASTORE_VERSION.key}=$hiveMetastoreVersion",
+        "--conf", s"${HiveUtils.HIVE_METASTORE_JARS.key}=maven",
         "--conf", s"${WAREHOUSE_PATH.key}=${wareHousePath.getCanonicalPath}",
         "--conf", s"spark.sql.test.version.index=$index",
         "--driver-java-options", s"-Dderby.system.home=${wareHousePath.getCanonicalPath} " +
@@ -250,8 +250,8 @@ class HiveExternalCatalogVersionsSuite extends SparkSubmitTestUtils {
       "--master", "local[2]",
       "--conf", s"${UI_ENABLED.key}=false",
       "--conf", s"${MASTER_REST_SERVER_ENABLED.key}=false",
-//      "--conf", s"${HiveUtils.HIVE_METASTORE_VERSION.key}=$hiveVersion",
-//      "--conf", s"${HiveUtils.HIVE_METASTORE_JARS.key}=maven",
+      "--conf", s"${HiveUtils.HIVE_METASTORE_VERSION.key}=$hiveVersion",
+      "--conf", s"${HiveUtils.HIVE_METASTORE_JARS.key}=maven",
       "--conf", s"${WAREHOUSE_PATH.key}=${wareHousePath.getCanonicalPath}",
       "--driver-java-options", s"-Dderby.system.home=${wareHousePath.getCanonicalPath}",
       unusedJar.toString)
