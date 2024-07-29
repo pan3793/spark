@@ -797,7 +797,7 @@ case class MergeIntoTable(
 sealed abstract class MergeAction extends Expression with Unevaluable {
   def condition: Option[Expression]
   override def nullable: Boolean = false
-  override def dataType: DataType = throw new UnresolvedException("nullable")
+  override def dataType: DataType = throw new UnresolvedException("nullable", this.toString)
   override def children: Seq[Expression] = condition.toSeq
 }
 
@@ -849,7 +849,7 @@ case class InsertStarAction(condition: Option[Expression]) extends MergeAction {
 case class Assignment(key: Expression, value: Expression) extends Expression
   with Unevaluable with BinaryLike[Expression] {
   override def nullable: Boolean = false
-  override def dataType: DataType = throw new UnresolvedException("nullable")
+  override def dataType: DataType = throw new UnresolvedException("nullable", this.toString)
   override def left: Expression = key
   override def right: Expression = value
   override def sql: String = s"${key.sql} = ${value.sql}"

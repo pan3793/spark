@@ -251,7 +251,8 @@ case class UnresolvedPolymorphicPythonUDTF(
 
   override lazy val resolved = false
 
-  override def elementSchema: StructType = throw new UnresolvedException("elementSchema")
+  override def elementSchema: StructType =
+    throw new UnresolvedException("elementSchema", this.toString)
 
   override protected def withNewChildrenInternal(
       newChildren: IndexedSeq[Expression]): UnresolvedPolymorphicPythonUDTF =

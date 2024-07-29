@@ -45,12 +45,13 @@ case class UnresolvedNamedLambdaVariable(nameParts: Seq[String])
   override def name: String =
     nameParts.map(n => if (n.contains(".")) s"`$n`" else n).mkString(".")
 
-  override def exprId: ExprId = throw new UnresolvedException("exprId")
-  override def dataType: DataType = throw new UnresolvedException("dataType")
-  override def nullable: Boolean = throw new UnresolvedException("nullable")
-  override def qualifier: Seq[String] = throw new UnresolvedException("qualifier")
-  override def toAttribute: Attribute = throw new UnresolvedException("toAttribute")
-  override def newInstance(): NamedExpression = throw new UnresolvedException("newInstance")
+  override def exprId: ExprId = throw new UnresolvedException("exprId", this.toString)
+  override def dataType: DataType = throw new UnresolvedException("dataType", this.toString)
+  override def nullable: Boolean = throw new UnresolvedException("nullable", this.toString)
+  override def qualifier: Seq[String] = throw new UnresolvedException("qualifier", this.toString)
+  override def toAttribute: Attribute = throw new UnresolvedException("toAttribute", this.toString)
+  override def newInstance(): NamedExpression =
+    throw new UnresolvedException("newInstance", this.toString)
   override lazy val resolved = false
   final override val nodePatterns: Seq[TreePattern] = Seq(LAMBDA_VARIABLE)
 

@@ -319,8 +319,8 @@ case class UnresolvedWindowExpression(
     child: Expression,
     windowSpec: WindowSpecReference) extends UnaryExpression with Unevaluable {
 
-  override def dataType: DataType = throw new UnresolvedException("dataType")
-  override def nullable: Boolean = throw new UnresolvedException("nullable")
+  override def dataType: DataType = throw new UnresolvedException("dataType", this.toString)
+  override def nullable: Boolean = throw new UnresolvedException("nullable", this.toString)
   override lazy val resolved = false
 
   override protected def withNewChildInternal(newChild: Expression): UnresolvedWindowExpression =
