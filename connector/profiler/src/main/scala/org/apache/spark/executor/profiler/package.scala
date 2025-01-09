@@ -36,6 +36,13 @@ package object profiler {
       .stringConf
       .createOptional
 
+  private[profiler] val EXECUTOR_PROFILING_DFS_OVERWRITE =
+    ConfigBuilder("spark.executor.profiling.dfsOverwrite")
+      .doc("Whether to overwrite the existed jfr files on the DFS.")
+      .version("4.0.0")
+      .booleanConf
+      .createWithDefault(false)
+
   private[profiler] val EXECUTOR_PROFILING_LOCAL_DIR =
     ConfigBuilder("spark.executor.profiling.localDir")
       .doc("Local file system path on executor where profiler output is saved. Defaults to the " +
