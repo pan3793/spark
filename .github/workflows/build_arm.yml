@@ -33,6 +33,6 @@ jobs:
       packages: write
     name: Run
     uses: ./.github/workflows/build_and_test.yml
-    if: github.repository == 'apache/spark'
+    if: github.repository == 'pan3793/spark'
     with:
       os: ubuntu-24.04-arm
