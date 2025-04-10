@@ -20,6 +20,9 @@
 name: "Build (master, Scala 2.13, Hadoop 3, Linux arm64)"
 
 on:
+  push:
+    branches:
+      - '**'
   schedule:
     - cron: '0 5 * * *'
   workflow_dispatch:
