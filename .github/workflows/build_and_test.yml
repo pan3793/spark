@@ -37,6 +37,11 @@ on:
         required: false
         type: string
         default: hadoop3
+      os:
+        description: OS to run this build.
+        required: false
+        type: string
+        default: ubuntu-latest
       envs:
         description: Additional environment variables to set when running the tests. Should be in JSON format.
         required: false
@@ -56,7 +61,7 @@ on:
 jobs:
   precondition:
     name: Check changes
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.os }}
     env:
       GITHUB_PREV_SHA: ${{ github.event.before }}
     outputs:
@@ -226,7 +231,7 @@ jobs:
     name: "Build modules: ${{ matrix.modules }} ${{ matrix.comment }}"
     needs: precondition
     if: fromJson(needs.precondition.outputs.required).build == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.os }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -399,7 +404,7 @@ jobs:
       fromJson(needs.precondition.outputs.required).lint == 'true' ||
       fromJson(needs.precondition.outputs.required).docs == 'true' ||
       fromJson(needs.precondition.outputs.required).sparkr == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.os }}
     permissions:
       packages: write
     steps:
@@ -490,7 +495,7 @@ jobs:
     # always run if pyspark == 'true', even infra-image is skip (such as non-master job)
     if: (!cancelled()) && (fromJson(needs.precondition.outputs.required).pyspark == 'true' || fromJson(needs.precondition.outputs.required).pyspark-pandas == 'true')
     name: "Build modules: ${{ matrix.modules }}"
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.os }}
     timeout-minutes: 120
     container:
       image: ${{ needs.precondition.outputs.image_pyspark_url_link }}
@@ -653,7 +658,7 @@ jobs:
     # always run if sparkr == 'true', even infra-image is skip (such as non-master job)
     if: (!cancelled()) && fromJson(needs.precondition.outputs.required).sparkr == 'true'
     name: "Build modules: sparkr"
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.os }}
     timeout-minutes: 120
     container:
       image: ${{ needs.precondition.outputs.image_sparkr_url_link }}
@@ -727,7 +732,7 @@ jobs:
     needs: [precondition]
     if: (!cancelled()) && fromJson(needs.precondition.outputs.required).buf == 'true'
     name: Protobuf breaking change detection and Python CodeGen check
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.os }}
     steps:
     - name: Checkout Spark repository
       uses: actions/checkout@v4
@@ -775,7 +780,7 @@ jobs:
     # always run if lint == 'true', even infra-image is skip (such as non-master job)
     if: (!cancelled()) && fromJson(needs.precondition.outputs.required).lint == 'true'
     name: Linters, licenses, and dependencies
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.os }}
     timeout-minutes: 120
     env:
       LC_ALL: C.UTF-8
@@ -906,7 +911,7 @@ jobs:
     # always run if lint == 'true', even infra-image is skip (such as non-master job)
     if: (!cancelled()) && fromJson(needs.precondition.outputs.required).docs == 'true'
     name: Documentation generation
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.os }}
     timeout-minutes: 120
     env:
       LC_ALL: C.UTF-8
@@ -1028,7 +1033,7 @@ jobs:
     needs: precondition
     if: fromJson(needs.precondition.outputs.required).tpcds-1g == 'true'
     name: Run TPC-DS queries with SF=1
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.os }}
     timeout-minutes: 120
     env:
       SPARK_LOCAL_IP: localhost
@@ -1130,7 +1135,7 @@ jobs:
     needs: precondition
     if: fromJson(needs.precondition.outputs.required).docker-integration-tests == 'true'
     name: Run Docker integration tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.os }}
     timeout-minutes: 120
     env:
       HADOOP_PROFILE: ${{ inputs.hadoop }}
@@ -1197,7 +1202,7 @@ jobs:
     needs: precondition
     if: fromJson(needs.precondition.outputs.required).k8s-integration-tests == 'true'
     name: Run Spark on Kubernetes Integration test
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.os }}
     timeout-minutes: 120
     steps:
       - name: Checkout Spark repository
@@ -1276,7 +1281,7 @@ jobs:
     needs: [precondition]
     if: fromJson(needs.precondition.outputs.required).ui == 'true'
     name: Run Spark UI tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.os }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
