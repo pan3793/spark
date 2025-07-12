@@ -28,15 +28,17 @@ import java.util.zip.{ZipEntry, ZipOutputStream}
 import scala.collection.JavaConverters._
 import scala.collection.immutable.{Map => IMap}
 import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet, ListBuffer, Map}
+import scala.util.{Failure, Success, Try}
 import scala.util.control.NonFatal
 
 import com.google.common.base.Objects
+import org.apache.commons.codec.digest.DigestUtils
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs._
 import org.apache.hadoop.fs.permission.FsPermission
 import org.apache.hadoop.io.{DataOutputBuffer, Text}
 import org.apache.hadoop.mapreduce.MRJobConfig
-import org.apache.hadoop.security.UserGroupInformation
+import org.apache.hadoop.security.{AccessControlException, UserGroupInformation}
 import org.apache.hadoop.util.StringUtils
 import org.apache.hadoop.yarn.api._
 import org.apache.hadoop.yarn.api.ApplicationConstants.Environment
@@ -48,7 +50,7 @@ import org.apache.hadoop.yarn.exceptions.ApplicationNotFoundException
 import org.apache.hadoop.yarn.security.AMRMTokenIdentifier
 import org.apache.hadoop.yarn.util.Records
 
-import org.apache.spark.{SecurityManager, SparkConf, SparkException}
+import org.apache.spark.{SecurityManager, SPARK_VERSION, SparkConf, SparkException}
 import org.apache.spark.api.python.PythonUtils
 import org.apache.spark.deploy.{SparkApplication, SparkHadoopUtil}
 import org.apache.spark.deploy.security.HadoopDelegationTokenManager
@@ -583,6 +585,119 @@ private[spark] class Client(
       case _ => None
     }
 
+    def createJarsArchive(jarsArchive: File): Unit = {
+      val jarsDir = new File(
+        YarnCommandBuilderUtils.findJarsDir(sparkConf.getenv("SPARK_HOME")))
+
+      val jarsStream = new ZipOutputStream(new FileOutputStream(jarsArchive))
+      try {
+        jarsStream.setLevel(0)
+        jarsDir.listFiles().foreach { f =>
+          if (f.isFile && f.getName.toLowerCase(Locale.ROOT).endsWith(".jar") && f.canRead) {
+            jarsStream.putNextEntry(new ZipEntry(f.getName))
+            Files.copy(f.toPath, jarsStream)
+            jarsStream.closeEntry()
+          }
+        }
+      } finally {
+        jarsStream.close()
+      }
+    }
+
+    def autoArchive(archiveDir: Path): Unit = {
+      // Files are world-wide readable and writable -> rw-rw-rw-
+      val ALL_RW_PERMISSION: FsPermission =
+        FsPermission.createImmutable(Integer.parseInt("666", 8).toShort)
+
+      val archiveName: String = {
+        val jarsDir = new File(
+          YarnCommandBuilderUtils.findJarsDir(sparkConf.getenv("SPARK_HOME")))
+        val jars = jarsDir.listFiles().filter { f =>
+          f.isFile && f.getName.toLowerCase().endsWith(".jar") && f.canRead
+        }.map(_.getName).sorted
+        s"spark-jars-$SPARK_VERSION-${DigestUtils.md5Hex(jars.mkString)}"
+      }
+
+      val archiveDirFs = FileSystem.get(archiveDir.toUri, hadoopConf)
+
+      val archive = new Path(archiveDir, s"$archiveName.zip")
+      val archive_LOCK = new Path(archiveDir, s"$archiveName.zip.LOCK")
+      val archive_SUCEESS = new Path(archiveDir, s"$archiveName.zip.SUCEESS")
+
+      val useArchive = if (archiveDirFs.exists(archive_SUCEESS)) {
+        if (archiveDirFs.exists(archive)) true else {
+          logError(s"$archive does not exist, deleting the dangling SUCCESS file.")
+          Utils.tryLogNonFatalError { archiveDirFs.delete(archive_SUCEESS, false) }
+          false
+        }
+      } else {
+        Try { archiveDirFs.createNewFile(archive_LOCK) } match {
+          case Success(true) => Utils.tryWithSafeFinally {
+            logInfo(s"Prepare to create reusable spark jars archive: $archive " +
+              "by uploading libraries under SPARK_HOME.")
+
+            val t1 = System.currentTimeMillis()
+            sparkConf.set("spark.yarn.archive.auto.createTime", t1.toString)
+
+            val localArchiveFile = File.createTempFile(
+              archiveName, ".zip", new File(Utils.getLocalDir(sparkConf)))
+            createJarsArchive(localArchiveFile)
+
+            val t2 = System.currentTimeMillis()
+            sparkConf.set("spark.yarn.archive.auto.uploadTime", t2.toString)
+            logInfo(s"Archiving spark jars takes ${Utils.msDurationToString(t2 - t1)}.")
+
+            val localArchivePath = getQualifiedLocalPath(localArchiveFile.toURI, hadoopConf)
+            val replication = sparkConf.get(AUTO_ARCHIVE_REPLICATION).map(_.toShort)
+            copyFileToRemote(
+              archiveDir, localArchivePath, replication, force = true,
+              symlinkCache = symlinkCache, destName = Some(s"$archiveName.zip"))
+            localArchiveFile.delete()
+            archiveDirFs.setPermission(archive, ALL_RW_PERMISSION)
+            archiveDirFs.createNewFile(archive_SUCEESS)
+            archiveDirFs.setPermission(archive_SUCEESS, ALL_RW_PERMISSION)
+
+            val t3 = System.currentTimeMillis()
+            sparkConf.set("spark.yarn.archive.auto.finishTime", t3.toString)
+            logInfo(s"Uploading spark jars archive takes ${Utils.msDurationToString(t3 - t2)}.")
+
+            true
+          } {
+            archiveDirFs.delete(archive_LOCK, false)
+          }
+          case Failure(cause: AccessControlException) =>
+            logWarning(s"Failed to create $archive_LOCK due to ${cause.getMessage}")
+            false
+          case Failure(cause) =>
+            logWarning(s"Failed to create $archive_LOCK", cause)
+            false
+          case _ =>
+            // likely because the LOCK file has been created by another spark-submit process
+            logInfo(s"Failed to create $archive_LOCK because file already exists.")
+            false
+        }
+      }
+
+      if (useArchive) {
+        logInfo(s"Rewrite ${SPARK_ARCHIVE.key}=$archive. Consider disabling this feature " +
+          s"by setting ${AUTO_ARCHIVE_ENABLED.key}=false if you hit spark jars mismatch issues.")
+        sparkConf.set(SPARK_ARCHIVE, archive.toString)
+      }
+    }
+
+    if (sparkConf.get(AUTO_ARCHIVE_ENABLED)) {
+      sparkConf.get(AUTO_ARCHIVE_DFS_DIR) match {
+        case None =>
+          logWarning(s"${AUTO_ARCHIVE_DFS_DIR.key} must be configured when " +
+            s"${AUTO_ARCHIVE_ENABLED.key} is true.")
+        case Some(archiveDir) if Utils.isLocalUri(archiveDir) =>
+          logWarning(s"${AUTO_ARCHIVE_DFS_DIR.key} cannot be a local URI.")
+        case Some(archiveDir) => Utils.tryLogNonFatalError {
+          autoArchive(getQualifiedLocalPath(Utils.resolveURI(archiveDir), hadoopConf))
+        }
+      }
+    }
+
     /**
      * Add Spark to the cache. There are two settings that control what files to add to the cache:
      * - if a Spark archive is defined, use the archive. The archive is expected to contain
@@ -630,24 +745,9 @@ private[spark] class Client(
           // No configuration, so fall back to uploading local jar files.
           logWarning(s"Neither ${SPARK_JARS.key} nor ${SPARK_ARCHIVE.key} is set, falling back " +
             "to uploading libraries under SPARK_HOME.")
-          val jarsDir = new File(YarnCommandBuilderUtils.findJarsDir(
-            sparkConf.getenv("SPARK_HOME")))
           val jarsArchive = File.createTempFile(LOCALIZED_LIB_DIR, ".zip",
             new File(Utils.getLocalDir(sparkConf)))
-          val jarsStream = new ZipOutputStream(new FileOutputStream(jarsArchive))
-
-          try {
-            jarsStream.setLevel(0)
-            jarsDir.listFiles().foreach { f =>
-              if (f.isFile && f.getName.toLowerCase(Locale.ROOT).endsWith(".jar") && f.canRead) {
-                jarsStream.putNextEntry(new ZipEntry(f.getName))
-                Files.copy(f.toPath, jarsStream)
-                jarsStream.closeEntry()
-              }
-            }
-          } finally {
-            jarsStream.close()
-          }
+          createJarsArchive(jarsArchive)
 
           distribute(jarsArchive.toURI.getPath,
             resType = LocalResourceType.ARCHIVE,
