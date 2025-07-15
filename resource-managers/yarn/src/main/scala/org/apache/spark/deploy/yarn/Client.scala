@@ -614,8 +614,8 @@ private[spark] class Client(
           YarnCommandBuilderUtils.findJarsDir(sparkConf.getenv("SPARK_HOME")))
         val jars = jarsDir.listFiles().filter { f =>
           f.isFile && f.getName.toLowerCase().endsWith(".jar") && f.canRead
-        }.map(_.getName).sorted
-        s"spark-jars-$SPARK_VERSION-${DigestUtils.md5Hex(jars.mkString)}"
+        }.sortBy(_.getName).map(f => s"${f.getName}|${f.length}")
+        s"spark-jars-$SPARK_VERSION-${DigestUtils.md5Hex(jars.mkString(","))}"
       }
 
       val archiveDirFs = FileSystem.get(archiveDir.toUri, hadoopConf)

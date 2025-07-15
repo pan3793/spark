@@ -176,7 +176,7 @@ package object config extends Logging {
       .doc("When enabled, spark-submit will automatically create and upload a reusable " +
         s"spark jars archive if it does not exist on HDFS, and rewrite ${SPARK_ARCHIVE.key} " +
         "to use the archive. To ensure the archive always matches the local spark jars, " +
-        "the archive's filename contains the MD5 of the local spark jars' name.")
+        "the archive's filename contains the MD5 of the local spark jars' name and length.")
       .version("3.3.4.101")
       .booleanConf
       .createWithDefault(false)
