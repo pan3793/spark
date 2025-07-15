@@ -171,6 +171,32 @@ package object config extends Logging {
     .toSequence
     .createOptional
 
+  private[spark] val AUTO_ARCHIVE_ENABLED =
+    ConfigBuilder("spark.yarn.archive.auto.enabled")
+      .doc("When enabled, spark-submit will automatically create and upload a reusable " +
+        s"spark jars archive if it does not exist on HDFS, and rewrite ${SPARK_ARCHIVE.key} " +
+        "to use the archive. To ensure the archive always matches the local spark jars, " +
+        "the archive's filename contains the MD5 of the local spark jars' name and length.")
+      .version("3.3.4.101")
+      .booleanConf
+      .createWithDefault(false)
+
+  private[spark] val AUTO_ARCHIVE_DFS_DIR =
+    ConfigBuilder("spark.yarn.archive.auto.dfsDir")
+      .doc("The HDFS directory used for storing resuable spark jars archive, " +
+        s"must be configured when ${AUTO_ARCHIVE_ENABLED.key} is true. " +
+        "The directory should be manually created with the world-wide rwx permissions.")
+      .version("3.3.4.101")
+      .stringConf
+      .createOptional
+
+  private[spark] val AUTO_ARCHIVE_REPLICATION =
+    ConfigBuilder("spark.yarn.archive.auto.replication")
+      .doc("Replication factor for resuable spark jars archive uploaded to HDFS.")
+      .version("3.3.4.101")
+      .intConf
+      .createOptional
+
   private[spark] val ARCHIVES_TO_DISTRIBUTE = ConfigBuilder("spark.yarn.dist.archives")
     .version("1.0.0")
     .stringConf
