@@ -23,7 +23,7 @@ import scala.collection.mutable
 
 import org.apache.spark.sql.catalyst.analysis.TempTableAlreadyExistsException
 import org.apache.spark.sql.catalyst.util.StringUtils
-import org.apache.spark.sql.errors.QueryCompilationErrors
+import org.apache.spark.sql.errors.{QueryCompilationErrors, QueryParsingErrors}
 
 
 /**
@@ -55,9 +55,17 @@ class GlobalTempViewManager(database: String) {
   def create(
       name: String,
       viewDefinition: TemporaryViewRelation,
+      ignoreIfExists: Boolean,
       overrideIfExists: Boolean): Unit = synchronized {
-    if (!overrideIfExists && viewDefinitions.contains(name)) {
-      throw new TempTableAlreadyExistsException(name)
+    if (ignoreIfExists && overrideIfExists) {
+      throw QueryParsingErrors.createViewWithBothIfNotExistsAndReplaceError(null)
+    }
+    if (viewDefinitions.contains(name)) {
+      if (ignoreIfExists) {
+        return
+      } else if (!overrideIfExists) {
+        throw new TempTableAlreadyExistsException(name)
+      }
     }
     viewDefinitions.put(name, viewDefinition)
   }

@@ -153,6 +153,20 @@ abstract class SQLViewSuite extends QueryTest with SQLTestUtils {
     }
   }
 
+  test("CREATE TEMPORARY VIEW IF NOT EXISTS") {
+    withTable("tab1", "tab2") {
+      withTempView("temp_v1") {
+        sql("CREATE TABLE tab1 (id int) USING parquet")
+        sql("INSERT INTO tab1 VALUES (1)")
+        sql("CREATE TABLE tab2 (name STRING) USING parquet")
+        sql("INSERT INTO tab2 VALUES ('one'), ('two')")
+        sql("CREATE TEMPORARY VIEW temp_v1 AS SELECT * FROM tab1")
+        sql("CREATE TEMPORARY VIEW IF NOT EXISTS temp_v1 AS SELECT * FROM tab2")
+        checkAnswer(sql("SELECT * FROM temp_v1"), Row(1))
+      }
+    }
+  }
+
   test("Issue exceptions for ALTER VIEW on the temporary view") {
     val viewName = "testView"
     withTempView(viewName) {
@@ -469,15 +483,6 @@ abstract class SQLViewSuite extends QueryTest with SQLTestUtils {
     }
     assert(e.message.contains(
       "CREATE TEMPORARY VIEW or the corresponding Dataset APIs only accept single-part view names"))
-  }
-
-  test("error handling: disallow IF NOT EXISTS for CREATE TEMPORARY VIEW") {
-    withTempView("myabcdview") {
-      val e = intercept[ParseException] {
-        sql("CREATE TEMPORARY VIEW IF NOT EXISTS myabcdview AS SELECT * FROM jt")
-      }
-      assert(e.message.contains("It is not allowed to define a TEMPORARY view with IF NOT EXISTS"))
-    }
   }
 
   test("error handling: fail if the temp view sql itself is invalid") {

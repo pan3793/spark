@@ -637,10 +637,6 @@ private[sql] object QueryParsingErrors extends DataTypeErrorsBase {
       messageParameters = Map("statement" -> statement))
   }
 
-  def defineTempViewWithIfNotExistsError(ctx: CreateViewContext): Throwable = {
-    new ParseException(errorClass = "_LEGACY_ERROR_TEMP_0053", ctx)
-  }
-
   def notAllowedToAddDBPrefixForTempViewError(
       nameParts: Seq[String],
       ctx: CreateViewContext): Throwable = {

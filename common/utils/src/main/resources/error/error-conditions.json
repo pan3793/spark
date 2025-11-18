@@ -7493,11 +7493,6 @@
       "CREATE VIEW with both IF NOT EXISTS and REPLACE is not allowed."
     ]
   },
-  "_LEGACY_ERROR_TEMP_0053" : {
-    "message" : [
-      "It is not allowed to define a TEMPORARY view with IF NOT EXISTS."
-    ]
-  },
   "_LEGACY_ERROR_TEMP_0056" : {
     "message" : [
       "Invalid time travel spec: <reason>."
