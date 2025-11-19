@@ -26,6 +26,7 @@ import org.apache.spark.sql.catalyst.plans.logical.Project
 import org.apache.spark.sql.catalyst.trees.Origin
 import org.apache.spark.sql.connector.catalog.CatalogManager.SESSION_CATALOG_NAME
 import org.apache.spark.sql.internal.SQLConf._
+import org.apache.spark.sql.internal.StaticSQLConf.GLOBAL_TEMP_DATABASE
 import org.apache.spark.sql.test.{SharedSparkSession, SQLTestUtils}
 
 class SimpleSQLViewSuite extends SQLViewSuite with SharedSparkSession
@@ -591,17 +592,27 @@ abstract class SQLViewSuite extends QueryTest with SQLTestUtils {
     }
   }
 
-  test("correctly handle CREATE VIEW IF NOT EXISTS") {
-    withTable("jt2") {
-      withView("testView") {
-        sql("CREATE VIEW testView AS SELECT id FROM jt")
+  test("correctly handle CREATE VIEW / TEMPORARY VIEW / GLOBAL TEMPORARY VIEW IF NOT EXISTS") {
+    Seq("VIEW", "TEMPORARY VIEW", "GLOBAL TEMPORARY VIEW").foreach { viewType =>
+      withTable("jt2") {
+        withView("testView") {
+          sql(s"CREATE $viewType testView AS SELECT id FROM jt")
 
-        val df = (1 until 10).map(i => i -> i).toDF("i", "j")
-        df.write.format("json").saveAsTable("jt2")
-        sql("CREATE VIEW IF NOT EXISTS testView AS SELECT * FROM jt2")
+          val df = (1 until 10).map(i => i -> i).toDF("i", "j")
+          df.write.format("json").saveAsTable("jt2")
+          sql(s"CREATE $viewType IF NOT EXISTS testView AS SELECT * FROM jt2")
 
-        // make sure our view doesn't change.
-        checkAnswer(sql("SELECT * FROM testView ORDER BY id"), (1 to 9).map(i => Row(i)))
+          // make sure our view doesn't change.
+          val viewIdentifier = viewType match {
+            case "GLOBAL TEMPORARY VIEW" =>
+              TableIdentifier("testView", Some(conf.getConf(GLOBAL_TEMP_DATABASE)))
+            case _ =>
+              TableIdentifier("testView")
+          }
+          checkAnswer(
+            sql(s"SELECT * FROM ${viewIdentifier.quotedString} ORDER BY id"),
+            (1 to 9).map(i => Row(i)))
+        }
       }
     }
   }
@@ -632,11 +643,15 @@ abstract class SQLViewSuite extends QueryTest with SQLTestUtils {
 
       sql("DROP VIEW testView")
 
-      val e = intercept[ParseException] {
-        sql("CREATE OR REPLACE VIEW IF NOT EXISTS testView AS SELECT id FROM jt")
-      }
-      assert(e.message.contains(
-        "CREATE VIEW with both IF NOT EXISTS and REPLACE is not allowed"))
+      checkError(
+        intercept[ParseException] {
+          sql("CREATE OR REPLACE VIEW IF NOT EXISTS testView AS SELECT id FROM jt")
+        },
+        condition = "CREATE_OR_REPLACE_WITH_IF_NOT_EXISTS_IS_NOT_ALLOWED",
+        sqlState = "42000",
+        parameters = Map("resourceType" -> "VIEW"),
+        context = ExpectedContext(
+          "CREATE OR REPLACE VIEW IF NOT EXISTS testView AS SELECT id FROM jt", 0, 65))
     }
   }
 

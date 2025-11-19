@@ -46,7 +46,7 @@ import org.apache.spark.sql.catalyst.trees.CurrentOrigin
 import org.apache.spark.sql.catalyst.util.{CharVarcharUtils, StringUtils}
 import org.apache.spark.sql.connector.catalog.CatalogManager
 import org.apache.spark.sql.connector.catalog.CatalogManager.SESSION_CATALOG_NAME
-import org.apache.spark.sql.errors.{QueryCompilationErrors, QueryExecutionErrors, QueryParsingErrors}
+import org.apache.spark.sql.errors.{QueryCompilationErrors, QueryExecutionErrors}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.internal.StaticSQLConf.GLOBAL_TEMP_DATABASE
 import org.apache.spark.sql.types.{MetadataBuilder, StructField, StructType}
@@ -672,7 +672,7 @@ class SessionCatalog(
       ignoreIfExists: Boolean,
       overrideIfExists: Boolean): Unit = synchronized {
     if (ignoreIfExists && overrideIfExists) {
-      throw QueryParsingErrors.createViewWithBothIfNotExistsAndReplaceError(null)
+      throw QueryCompilationErrors.createViewWithBothIfNotExistsAndReplaceError()
     }
     val normalized = format(name)
     if (tempViews.contains(normalized)) {
