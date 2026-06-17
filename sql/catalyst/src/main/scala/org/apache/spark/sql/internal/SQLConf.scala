@@ -5226,6 +5226,16 @@ object SQLConf {
       .enumConf(StoreAssignmentPolicy)
       .createWithDefault(StoreAssignmentPolicy.ANSI)
 
+  val V1_STORE_ASSIGNMENT_POLICY =
+    buildConf("spark.sql.v1StoreAssignmentPolicy")
+      .doc("Same as " + STORE_ASSIGNMENT_POLICY.key + ", but only takes effect for the built-in " +
+        "v1 data source insertion (e.g. INSERT INTO a Hive table or a file-based v1 table). " +
+        "This allows v1 data source insertion to use a different type coercion policy from v2 " +
+        "data source writes. When not set, it falls back to the value of " +
+        STORE_ASSIGNMENT_POLICY.key + ".")
+      .version("4.3.0")
+      .fallbackConf(STORE_ASSIGNMENT_POLICY)
+
   val FILE_SOURCE_INSERT_ENFORCE_NOT_NULL =
     buildConf("spark.sql.fileSource.insert.enforceNotNull")
       .doc("When true, Spark enforces NOT NULL constraints when inserting data into " +
@@ -8484,6 +8494,9 @@ class SQLConf extends Serializable with Logging with SqlApiConf {
 
   def storeAssignmentPolicy: StoreAssignmentPolicy.Value =
     getConf(STORE_ASSIGNMENT_POLICY)
+
+  def v1StoreAssignmentPolicy: StoreAssignmentPolicy.Value =
+    getConf(V1_STORE_ASSIGNMENT_POLICY)
 
   override def ansiEnabled: Boolean = getConf(ANSI_ENABLED)
 

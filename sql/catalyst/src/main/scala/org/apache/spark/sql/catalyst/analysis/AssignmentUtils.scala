@@ -180,7 +180,7 @@ object AssignmentUtils extends SQLConfHelper with CastSupport {
       addError(s"Conflicting assignments for '${colPath.quoted}': $conflictingAssignmentsStr")
       colExpr
     } else if (exactAssignments.isEmpty && fieldAssignments.isEmpty) {
-      TableOutputResolver.checkNullability(colExpr, col, conf, colPath)
+      TableOutputResolver.checkNullability(colExpr, col, conf.storeAssignmentPolicy, colPath)
     } else if (exactAssignments.nonEmpty) {
       if (updateStar && SQLConf.get.coerceMergeNestedTypes) {
         val value = exactAssignments.head.value
@@ -260,7 +260,8 @@ object AssignmentUtils extends SQLConfHelper with CastSupport {
                   GetStructField(value, fieldIndex, Some(matchingField.name))
                 case None =>
                   // Field doesn't exist in source, use target's current value with null check
-                  TableOutputResolver.checkNullability(targetFieldExpr, fieldAttr, conf, fieldPath)
+                  TableOutputResolver.checkNullability(
+                    targetFieldExpr, fieldAttr, conf.storeAssignmentPolicy, fieldPath)
               }
             case _ =>
               // Value is not a struct, cannot extract field

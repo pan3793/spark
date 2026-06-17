@@ -93,12 +93,19 @@ object TableOutputResolver extends SQLConfHelper with Logging {
       query: LogicalPlan,
       byName: Boolean,
       conf: SQLConf,
-      defaultValueFillMode: DefaultValueFillMode.Value = NONE): LogicalPlan = {
+      defaultValueFillMode: DefaultValueFillMode.Value = NONE,
+      isV2Write: Boolean): LogicalPlan = {
 
     if (expected.size < query.output.size) {
       throw QueryCompilationErrors.cannotWriteTooManyColumnsToTableError(
         tableName, expected.map(_.name), query.output)
     }
+
+    // The built-in v1 data source insertion honors `spark.sql.v1StoreAssignmentPolicy`, which
+    // falls back to `spark.sql.storeAssignmentPolicy` when not set. V2 writes always use
+    // `spark.sql.storeAssignmentPolicy`.
+    val storeAssignmentPolicy =
+      if (isV2Write) conf.storeAssignmentPolicy else conf.v1StoreAssignmentPolicy
 
     // In RECURSE mode, allow fewer source columns than target by filling trailing columns
     // with defaults. In other modes, a column count mismatch in by-position resolution is
@@ -114,6 +121,7 @@ object TableOutputResolver extends SQLConfHelper with Logging {
         query.output,
         expected,
         conf,
+        storeAssignmentPolicy,
         errors += _,
         Nil,
         defaultValueFillMode,
@@ -124,7 +132,8 @@ object TableOutputResolver extends SQLConfHelper with Logging {
           tableName, expected.map(_.name), query.output)
       }
       resolveColumnsByPosition(
-        tableName, query.output, expected, conf, errors += _, fillDefaultValue = fillDefaultValue)
+        tableName, query.output, expected, conf, storeAssignmentPolicy, errors += _,
+        fillDefaultValue = fillDefaultValue)
     }
 
     if (errors.nonEmpty) {
@@ -149,13 +158,17 @@ object TableOutputResolver extends SQLConfHelper with Logging {
       defaultValueFillMode: DefaultValueFillMode.Value): Expression = {
 
     val fillChildDefaultValue = defaultValueFillMode == RECURSE
+    // Row-level commands (UPDATE/MERGE) are only supported by v2 tables, which always use
+    // `spark.sql.storeAssignmentPolicy`.
+    val storeAssignmentPolicy = conf.storeAssignmentPolicy
     (value.dataType, col.dataType) match {
       // no need to reorder inner fields or cast if types are already compatible
       case (valueType, colType) if DataType.equalsIgnoreCompatibleNullability(valueType, colType) =>
         val canWriteExpr = canWrite(
-          tableName, valueType, colType, byName = true, conf, addError, colPath)
+          tableName, valueType, colType, byName = true, conf, storeAssignmentPolicy, addError,
+          colPath)
         if (canWriteExpr) {
-          val nullsHandled = checkNullability(value, col, conf, colPath)
+          val nullsHandled = checkNullability(value, col, storeAssignmentPolicy, colPath)
           applyColumnMetadata(nullsHandled, col)
         } else {
           value
@@ -163,20 +176,23 @@ object TableOutputResolver extends SQLConfHelper with Logging {
       case (valueType: StructType, colType: StructType) =>
         val resolvedValue = resolveStructType(
           tableName, value, valueType, col, colType,
-          byName = true, conf, addError, colPath, fillChildDefaultValue, enforceFullOutput = false)
+          byName = true, conf, storeAssignmentPolicy, addError, colPath, fillChildDefaultValue,
+          enforceFullOutput = false)
         resolvedValue.getOrElse(value)
       case (valueType: ArrayType, colType: ArrayType) =>
         val resolvedValue = resolveArrayType(
           tableName, value, valueType, col, colType,
-          byName = true, conf, addError, colPath, fillChildDefaultValue, enforceFullOutput = false)
+          byName = true, conf, storeAssignmentPolicy, addError, colPath, fillChildDefaultValue,
+          enforceFullOutput = false)
         resolvedValue.getOrElse(value)
       case (valueType: MapType, colType: MapType) =>
         val resolvedValue = resolveMapType(
           tableName, value, valueType, col, colType,
-          byName = true, conf, addError, colPath, fillChildDefaultValue, enforceFullOutput = false)
+          byName = true, conf, storeAssignmentPolicy, addError, colPath, fillChildDefaultValue,
+          enforceFullOutput = false)
         resolvedValue.getOrElse(value)
       case _ =>
-        checkUpdate(tableName, value, col, conf, addError, colPath)
+        checkUpdate(tableName, value, col, conf, storeAssignmentPolicy, addError, colPath)
     }
   }
 
@@ -185,6 +201,7 @@ object TableOutputResolver extends SQLConfHelper with Logging {
       value: Expression,
       attr: Attribute,
       conf: SQLConf,
+      storeAssignmentPolicy: StoreAssignmentPolicy.Value,
       addError: String => Unit,
       colPath: Seq[String]): Expression = {
 
@@ -197,11 +214,12 @@ object TableOutputResolver extends SQLConfHelper with Logging {
 
     val canWriteValue = canWrite(
       tableName, value.dataType, attrTypeWithoutCharVarchar,
-      byName = true, conf, addError, colPath)
+      byName = true, conf, storeAssignmentPolicy, addError, colPath)
 
     if (canWriteValue) {
-      val nullCheckedValue = checkNullability(value, attr, conf, colPath)
-      val casted = cast(nullCheckedValue, attrTypeWithoutCharVarchar, conf, colPath.quoted)
+      val nullCheckedValue = checkNullability(value, attr, storeAssignmentPolicy, colPath)
+      val casted = cast(
+        nullCheckedValue, attrTypeWithoutCharVarchar, conf, storeAssignmentPolicy, colPath.quoted)
       val exprWithStrLenCheck = if (conf.charVarcharAsString || !attrTypeHasCharVarchar) {
         casted
       } else {
@@ -317,13 +335,14 @@ object TableOutputResolver extends SQLConfHelper with Logging {
       expectedType: DataType,
       byName: Boolean,
       conf: SQLConf,
+      storeAssignmentPolicy: StoreAssignmentPolicy.Value,
       addError: String => Unit,
       colPath: Seq[String]): Boolean = {
-    conf.storeAssignmentPolicy match {
+    storeAssignmentPolicy match {
       case StoreAssignmentPolicy.STRICT | StoreAssignmentPolicy.ANSI =>
         DataTypeUtils.canWrite(
           tableName, valueType, expectedType, byName, conf.resolver, colPath.quoted,
-          conf.storeAssignmentPolicy, addError)
+          storeAssignmentPolicy, addError)
       case _ =>
         true
     }
@@ -334,6 +353,7 @@ object TableOutputResolver extends SQLConfHelper with Logging {
       inputCols: Seq[NamedExpression],
       expectedCols: Seq[Attribute],
       conf: SQLConf,
+      storeAssignmentPolicy: StoreAssignmentPolicy.Value,
       addError: String => Unit,
       colPath: Seq[String] = Nil,
       defaultValueFillMode: DefaultValueFillMode.Value,
@@ -369,18 +389,22 @@ object TableOutputResolver extends SQLConfHelper with Logging {
           case (matchedType: StructType, expectedType: StructType) =>
             resolveStructType(
               tableName, matchedCol, matchedType, actualExpectedCol, expectedType,
-              byName = true, conf, addError, newColPath, childFillDefaultValue, enforceFullOutput)
+              byName = true, conf, storeAssignmentPolicy, addError, newColPath,
+              childFillDefaultValue, enforceFullOutput)
           case (matchedType: ArrayType, expectedType: ArrayType) =>
             resolveArrayType(
               tableName, matchedCol, matchedType, actualExpectedCol, expectedType,
-              byName = true, conf, addError, newColPath, childFillDefaultValue, enforceFullOutput)
+              byName = true, conf, storeAssignmentPolicy, addError, newColPath,
+              childFillDefaultValue, enforceFullOutput)
           case (matchedType: MapType, expectedType: MapType) =>
             resolveMapType(
               tableName, matchedCol, matchedType, actualExpectedCol, expectedType,
-              byName = true, conf, addError, newColPath, childFillDefaultValue, enforceFullOutput)
+              byName = true, conf, storeAssignmentPolicy, addError, newColPath,
+              childFillDefaultValue, enforceFullOutput)
           case _ =>
             checkField(
-              tableName, actualExpectedCol, matchedCol, byName = true, conf, addError, newColPath)
+              tableName, actualExpectedCol, matchedCol, byName = true, conf, storeAssignmentPolicy,
+              addError, newColPath)
         }
       }
     }
@@ -414,6 +438,7 @@ object TableOutputResolver extends SQLConfHelper with Logging {
       inputCols: Seq[NamedExpression],
       expectedCols: Seq[Attribute],
       conf: SQLConf,
+      storeAssignmentPolicy: StoreAssignmentPolicy.Value,
       addError: String => Unit,
       colPath: Seq[String] = Nil,
       fillDefaultValue: Boolean = false): Seq[NamedExpression] = {
@@ -452,17 +477,22 @@ object TableOutputResolver extends SQLConfHelper with Logging {
         case (inputType: StructType, expectedType: StructType) =>
           resolveStructType(
             tableName, inputCol, inputType, expectedCol, expectedType,
-            byName = false, conf, addError, newColPath, fillDefaultValue, enforceFullOutput = true)
+            byName = false, conf, storeAssignmentPolicy, addError, newColPath, fillDefaultValue,
+            enforceFullOutput = true)
         case (inputType: ArrayType, expectedType: ArrayType) =>
           resolveArrayType(
             tableName, inputCol, inputType, expectedCol, expectedType,
-            byName = false, conf, addError, newColPath, fillDefaultValue, enforceFullOutput = true)
+            byName = false, conf, storeAssignmentPolicy, addError, newColPath, fillDefaultValue,
+            enforceFullOutput = true)
         case (inputType: MapType, expectedType: MapType) =>
           resolveMapType(
             tableName, inputCol, inputType, expectedCol, expectedType,
-            byName = false, conf, addError, newColPath, fillDefaultValue, enforceFullOutput = true)
+            byName = false, conf, storeAssignmentPolicy, addError, newColPath, fillDefaultValue,
+            enforceFullOutput = true)
         case _ =>
-          checkField(tableName, expectedCol, inputCol, byName = false, conf, addError, newColPath)
+          checkField(
+            tableName, expectedCol, inputCol, byName = false, conf, storeAssignmentPolicy,
+            addError, newColPath)
       }
     }
 
@@ -493,9 +523,9 @@ object TableOutputResolver extends SQLConfHelper with Logging {
   private[sql] def checkNullability(
       input: Expression,
       expected: Attribute,
-      conf: SQLConf,
+      storeAssignmentPolicy: StoreAssignmentPolicy.Value,
       colPath: Seq[String]): Expression = {
-    if (requiresNullChecks(input, expected, conf)) {
+    if (requiresNullChecks(input, expected, storeAssignmentPolicy)) {
       AssertNotNull(input, colPath)
     } else {
       input
@@ -505,8 +535,8 @@ object TableOutputResolver extends SQLConfHelper with Logging {
   private def requiresNullChecks(
       input: Expression,
       attr: Attribute,
-      conf: SQLConf): Boolean = {
-    input.nullable && !attr.nullable && conf.storeAssignmentPolicy != StoreAssignmentPolicy.LEGACY
+      storeAssignmentPolicy: StoreAssignmentPolicy.Value): Boolean = {
+    input.nullable && !attr.nullable && storeAssignmentPolicy != StoreAssignmentPolicy.LEGACY
   }
 
   // scalastyle:off argcount
@@ -518,21 +548,23 @@ object TableOutputResolver extends SQLConfHelper with Logging {
       expectedType: StructType,
       byName: Boolean,
       conf: SQLConf,
+      storeAssignmentPolicy: StoreAssignmentPolicy.Value,
       addError: String => Unit,
       colPath: Seq[String],
       fillDefaultValue: Boolean,
       enforceFullOutput: Boolean): Option[NamedExpression] = {
-    val nullCheckedInput = checkNullability(input, expected, conf, colPath)
+    val nullCheckedInput = checkNullability(input, expected, storeAssignmentPolicy, colPath)
     val fields = inputType.zipWithIndex.map { case (f, i) =>
       Alias(GetStructField(nullCheckedInput, i, Some(f.name)), f.name)()
     }
     val defaultValueMode = if (fillDefaultValue) RECURSE else NONE
     val resolved = if (byName) {
-      reorderColumnsByName(tableName, fields, toAttributes(expectedType), conf, addError, colPath,
-        defaultValueMode, enforceFullOutput)
+      reorderColumnsByName(tableName, fields, toAttributes(expectedType), conf,
+        storeAssignmentPolicy, addError, colPath, defaultValueMode, enforceFullOutput)
     } else {
       resolveColumnsByPosition(
-        tableName, fields, toAttributes(expectedType), conf, addError, colPath, fillDefaultValue)
+        tableName, fields, toAttributes(expectedType), conf, storeAssignmentPolicy, addError,
+        colPath, fillDefaultValue)
     }
     if (resolved.length == expectedType.length) {
       val struct = CreateStruct(resolved)
@@ -560,21 +592,23 @@ object TableOutputResolver extends SQLConfHelper with Logging {
       expectedType: ArrayType,
       byName: Boolean,
       conf: SQLConf,
+      storeAssignmentPolicy: StoreAssignmentPolicy.Value,
       addError: String => Unit,
       colPath: Seq[String],
       fillDefaultValue: Boolean,
       enforceFullOutput: Boolean): Option[NamedExpression] = {
-    val nullCheckedInput = checkNullability(input, expected, conf, colPath)
+    val nullCheckedInput = checkNullability(input, expected, storeAssignmentPolicy, colPath)
     val param = NamedLambdaVariable("element", inputType.elementType, inputType.containsNull)
     val fakeAttr =
       AttributeReference("element", expectedType.elementType, expectedType.containsNull)()
     val res = if (byName) {
       val defaultValueMode = if (fillDefaultValue) RECURSE else NONE
-      reorderColumnsByName(tableName, Seq(param), Seq(fakeAttr), conf, addError, colPath,
-        defaultValueMode, enforceFullOutput)
+      reorderColumnsByName(tableName, Seq(param), Seq(fakeAttr), conf, storeAssignmentPolicy,
+        addError, colPath, defaultValueMode, enforceFullOutput)
     } else {
       resolveColumnsByPosition(
-        tableName, Seq(param), Seq(fakeAttr), conf, addError, colPath, fillDefaultValue)
+        tableName, Seq(param), Seq(fakeAttr), conf, storeAssignmentPolicy, addError, colPath,
+        fillDefaultValue)
     }
     if (res.length == 1) {
       val castedArray =
@@ -602,21 +636,23 @@ object TableOutputResolver extends SQLConfHelper with Logging {
       expectedType: MapType,
       byName: Boolean,
       conf: SQLConf,
+      storeAssignmentPolicy: StoreAssignmentPolicy.Value,
       addError: String => Unit,
       colPath: Seq[String],
       fillDefaultValue: Boolean,
       enforceFullOutput: Boolean): Option[NamedExpression] = {
-    val nullCheckedInput = checkNullability(input, expected, conf, colPath)
+    val nullCheckedInput = checkNullability(input, expected, storeAssignmentPolicy, colPath)
 
     val keyParam = NamedLambdaVariable("key", inputType.keyType, nullable = false)
     val fakeKeyAttr = AttributeReference("key", expectedType.keyType, nullable = false)()
     val defaultValueFillMode = if (fillDefaultValue) RECURSE else NONE
     val resKey = if (byName) {
-      reorderColumnsByName(tableName, Seq(keyParam), Seq(fakeKeyAttr), conf, addError, colPath,
-        defaultValueFillMode, enforceFullOutput)
+      reorderColumnsByName(tableName, Seq(keyParam), Seq(fakeKeyAttr), conf, storeAssignmentPolicy,
+        addError, colPath, defaultValueFillMode, enforceFullOutput)
     } else {
       resolveColumnsByPosition(
-        tableName, Seq(keyParam), Seq(fakeKeyAttr), conf, addError, colPath, fillDefaultValue)
+        tableName, Seq(keyParam), Seq(fakeKeyAttr), conf, storeAssignmentPolicy, addError, colPath,
+        fillDefaultValue)
     }
 
     val valueParam =
@@ -624,11 +660,12 @@ object TableOutputResolver extends SQLConfHelper with Logging {
     val fakeValueAttr =
       AttributeReference("value", expectedType.valueType, expectedType.valueContainsNull)()
     val resValue = if (byName) {
-      reorderColumnsByName(tableName, Seq(valueParam), Seq(fakeValueAttr), conf, addError, colPath,
-        defaultValueFillMode, enforceFullOutput)
+      reorderColumnsByName(tableName, Seq(valueParam), Seq(fakeValueAttr), conf,
+        storeAssignmentPolicy, addError, colPath, defaultValueFillMode, enforceFullOutput)
     } else {
       resolveColumnsByPosition(
-        tableName, Seq(valueParam), Seq(fakeValueAttr), conf, addError, colPath, fillDefaultValue)
+        tableName, Seq(valueParam), Seq(fakeValueAttr), conf, storeAssignmentPolicy, addError,
+        colPath, fillDefaultValue)
     }
 
     if (resKey.length == 1 && resValue.length == 1) {
@@ -707,6 +744,7 @@ object TableOutputResolver extends SQLConfHelper with Logging {
       queryExpr: NamedExpression,
       byName: Boolean,
       conf: SQLConf,
+      storeAssignmentPolicy: StoreAssignmentPolicy.Value,
       addError: String => Unit,
       colPath: Seq[String]): Option[NamedExpression] = {
 
@@ -719,7 +757,7 @@ object TableOutputResolver extends SQLConfHelper with Logging {
 
     val canWriteExpr = canWrite(
       tableName, queryExpr.dataType, attrTypeWithoutCharVarchar,
-      byName, conf, addError, colPath)
+      byName, conf, storeAssignmentPolicy, addError, colPath)
 
     if (canWriteExpr) {
       val prepared =
@@ -730,14 +768,15 @@ object TableOutputResolver extends SQLConfHelper with Logging {
           queryExpr
         } else {
           val udtUnwrapped = unwrapUDT(queryExpr)
-          val casted = cast(udtUnwrapped, attrTypeWithoutCharVarchar, conf, colPath.quoted)
+          val casted = cast(
+            udtUnwrapped, attrTypeWithoutCharVarchar, conf, storeAssignmentPolicy, colPath.quoted)
           if (conf.charVarcharAsString || !attrTypeHasCharVarchar) {
             casted
           } else {
             CharVarcharUtils.stringLengthCheck(casted, tableAttr.dataType)
           }
         }
-      val nullChecked = checkNullability(prepared, tableAttr, conf, colPath)
+      val nullChecked = checkNullability(prepared, tableAttr, storeAssignmentPolicy, colPath)
       Some(applyColumnMetadata(nullChecked, tableAttr))
     } else {
       None
@@ -781,9 +820,10 @@ object TableOutputResolver extends SQLConfHelper with Logging {
       expr: Expression,
       expectedType: DataType,
       conf: SQLConf,
+      storeAssignmentPolicy: StoreAssignmentPolicy.Value,
       colName: String): Expression = {
 
-    conf.storeAssignmentPolicy match {
+    storeAssignmentPolicy match {
       case StoreAssignmentPolicy.ANSI =>
         val cast = Cast(expr, expectedType, Option(conf.sessionLocalTimeZone), ansiEnabled = true)
         cast.setTagValue(Cast.BY_TABLE_INSERTION, ())

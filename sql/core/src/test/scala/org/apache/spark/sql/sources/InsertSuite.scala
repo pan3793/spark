@@ -2909,6 +2909,76 @@ class InsertSuite extends DataSourceTest with SharedSparkSession {
     }
   }
 
+  test("v1StoreAssignmentPolicy only affects v1 data source insertion") {
+    import SQLConf.StoreAssignmentPolicy
+
+    // By default, v1StoreAssignmentPolicy falls back to storeAssignmentPolicy.
+    Seq(StoreAssignmentPolicy.ANSI, StoreAssignmentPolicy.STRICT, StoreAssignmentPolicy.LEGACY)
+      .foreach { policy =>
+        withSQLConf(SQLConf.STORE_ASSIGNMENT_POLICY.key -> policy.toString) {
+          assert(spark.sessionState.conf.v1StoreAssignmentPolicy === policy)
+        }
+      }
+    // When set explicitly, v1StoreAssignmentPolicy overrides the fallback.
+    withSQLConf(
+      SQLConf.STORE_ASSIGNMENT_POLICY.key -> StoreAssignmentPolicy.ANSI.toString,
+      SQLConf.V1_STORE_ASSIGNMENT_POLICY.key -> StoreAssignmentPolicy.LEGACY.toString) {
+      assert(spark.sessionState.conf.storeAssignmentPolicy === StoreAssignmentPolicy.ANSI)
+      assert(spark.sessionState.conf.v1StoreAssignmentPolicy === StoreAssignmentPolicy.LEGACY)
+    }
+
+    // A v1 INSERT casting STRING to INT is rejected under ANSI but allowed under LEGACY.
+    withSQLConf(SQLConf.USE_V1_SOURCE_LIST.key -> "parquet") {
+      // storeAssignmentPolicy = ANSI, v1StoreAssignmentPolicy unset -> falls back to ANSI.
+      withSQLConf(SQLConf.STORE_ASSIGNMENT_POLICY.key -> StoreAssignmentPolicy.ANSI.toString) {
+        withTable("t") {
+          sql("create table t(i int) using parquet")
+          checkError(
+            exception = intercept[AnalysisException] {
+              sql("insert into t values('a')")
+            },
+            condition = "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST",
+            parameters = Map(
+              "tableName" -> "`spark_catalog`.`default`.`t`",
+              "colName" -> "`i`",
+              "srcType" -> "\"STRING\"",
+              "targetType" -> "\"INT\""))
+        }
+      }
+
+      // storeAssignmentPolicy = ANSI, but v1StoreAssignmentPolicy = LEGACY relaxes v1 writes.
+      withSQLConf(
+        SQLConf.STORE_ASSIGNMENT_POLICY.key -> StoreAssignmentPolicy.ANSI.toString,
+        SQLConf.V1_STORE_ASSIGNMENT_POLICY.key -> StoreAssignmentPolicy.LEGACY.toString) {
+        withTable("t") {
+          sql("create table t(i int) using parquet")
+          sql("insert into t values('1')")
+          sql("insert into t values('a')")
+          checkAnswer(spark.table("t"), Seq(Row(1), Row(null)))
+        }
+      }
+
+      // storeAssignmentPolicy = LEGACY, but v1StoreAssignmentPolicy = ANSI tightens v1 writes.
+      withSQLConf(
+        SQLConf.STORE_ASSIGNMENT_POLICY.key -> StoreAssignmentPolicy.LEGACY.toString,
+        SQLConf.V1_STORE_ASSIGNMENT_POLICY.key -> StoreAssignmentPolicy.ANSI.toString) {
+        withTable("t") {
+          sql("create table t(i int) using parquet")
+          checkError(
+            exception = intercept[AnalysisException] {
+              sql("insert into t values('a')")
+            },
+            condition = "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST",
+            parameters = Map(
+              "tableName" -> "`spark_catalog`.`default`.`t`",
+              "colName" -> "`i`",
+              "srcType" -> "\"STRING\"",
+              "targetType" -> "\"INT\""))
+        }
+      }
+    }
+  }
+
   test("SPARK-55716: V1 INSERT NOT NULL enforcement respects storeAssignmentPolicy") {
     Seq("parquet", "orc").foreach { format =>
       // ANSI mode (default): rejects null

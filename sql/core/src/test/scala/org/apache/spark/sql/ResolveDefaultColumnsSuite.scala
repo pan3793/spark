@@ -415,7 +415,7 @@ class ResolveDefaultColumnsSuite extends SharedSparkSession {
 
     val resolved = TableOutputResolver.resolveOutputColumns(
       "t", expected, query, byName = false, spark.sessionState.conf,
-      TableOutputResolver.DefaultValueFillMode.RECURSE)
+      TableOutputResolver.DefaultValueFillMode.RECURSE, isV2Write = false)
 
     val hasLengthCheck = resolved.expressions.exists(_.exists {
       case s: StaticInvoke => s.functionName == "charTypeWriteSideCheck"

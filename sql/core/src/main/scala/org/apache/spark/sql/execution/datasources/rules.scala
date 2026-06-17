@@ -253,7 +253,7 @@ case class PreprocessTableCreation(catalog: SessionCatalog) extends Rule[Logical
         tableDesc = existingTable,
         query = Some(TableOutputResolver.resolveOutputColumns(
           tableDesc.qualifiedName, toAttributes(existingTable.schema), newQuery,
-          byName = true, conf)))
+          byName = true, conf, isV2Write = false)))
 
     // Here we normalize partition, bucket and sort column names, w.r.t. the case sensitivity
     // config, and do various checks:
@@ -528,7 +528,8 @@ object PreprocessTableInsertion extends ResolveInsertionBase {
         query,
         byName,
         conf,
-        TableOutputResolver.DefaultValueFillMode.FILL)
+        TableOutputResolver.DefaultValueFillMode.FILL,
+        isV2Write = false)
     } catch {
       case e: AnalysisException if staticPartCols.nonEmpty &&
         (e.getCondition == "INSERT_COLUMN_ARITY_MISMATCH.NOT_ENOUGH_DATA_COLUMNS" ||

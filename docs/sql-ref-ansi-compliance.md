@@ -226,6 +226,8 @@ INSERT INTO test VALUES (2147483648L);
 org.apache.spark.SparkArithmeticException: [CAST_OVERFLOW_IN_TABLE_INSERT] Fail to insert a value of "BIGINT" type into the "INT" type column `i` due to an overflow. Use `try_cast` on the input value to tolerate overflow and return NULL instead.
 ```
 
+`spark.sql.v1StoreAssignmentPolicy` allows using a different store assignment policy for the built-in v1 data source insertion (for example, `INSERT` into a Hive table or a file-based v1 table) than for v2 data source writes. When it is not set, it falls back to the value of `spark.sql.storeAssignmentPolicy`. This is useful when you want to keep the stricter `ANSI` policy for v2 writes while preserving the looser `LEGACY` behavior for v1 data source insertion, or vice versa.
+
 ### Type coercion
 #### Type Promotion and Precedence
 When `spark.sql.ansi.enabled` is set to `true`, Spark SQL uses several rules that govern how conflicts between data types are resolved.
