@@ -109,7 +109,14 @@ object UnwrapCastInBinaryComparison extends Rule[LogicalPlan] {
       }
   }
 
-  private def unwrapCast(exp: Expression): Option[Expression] = exp match {
+  /**
+   * Unwraps the cast in a single expression of the patterns listed in the class doc. Returns
+   * None if the expression is not rewritten.
+   *
+   * Besides the rule, this is also called at runtime to unwrap the cast in a dynamic partition
+   * pruning filter, whose values are only known once its subquery has been evaluated.
+   */
+  private[sql] def unwrapCast(exp: Expression): Option[Expression] = exp match {
     // Not a canonical form. In this case we first canonicalize the expression by swapping the
     // literal and cast side, then process the result and swap the literal and cast again to
     // restore the original order.

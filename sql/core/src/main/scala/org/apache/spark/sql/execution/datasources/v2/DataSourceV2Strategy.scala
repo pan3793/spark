@@ -27,8 +27,9 @@ import org.apache.spark.internal.LogKeys.EXPR
 import org.apache.spark.sql.catalyst.analysis.{NamedRelation, ResolvedIdentifier, ResolvedNamespace, ResolvedPartitionSpec, ResolvedPersistentView, ResolvedTable, ResolvedTempView}
 import org.apache.spark.sql.catalyst.catalog.CatalogUtils
 import org.apache.spark.sql.catalyst.expressions
-import org.apache.spark.sql.catalyst.expressions.{And, Attribute, DynamicPruning, Expression, NamedExpression, Not, Or, PredicateHelper, SubqueryExpression}
+import org.apache.spark.sql.catalyst.expressions.{And, Attribute, DynamicPruning, Expression, InSet, IsNull, Literal, NamedExpression, Not, Or, PredicateHelper, SubqueryExpression}
 import org.apache.spark.sql.catalyst.expressions.Literal.TrueLiteral
+import org.apache.spark.sql.catalyst.optimizer.UnwrapCastInBinaryComparison
 import org.apache.spark.sql.catalyst.planning.PhysicalOperation
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.trees.TreePattern.SCALAR_SUBQUERY
@@ -51,6 +52,7 @@ import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.internal.StaticSQLConf.WAREHOUSE_PATH
 import org.apache.spark.sql.metricview.logical.CreateMetricView
 import org.apache.spark.sql.sources.{BaseRelation, TableScan}
+import org.apache.spark.sql.types.BooleanType
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.util.ArrayImplicits._
 import org.apache.spark.util.SparkStringUtils
@@ -977,17 +979,34 @@ private[sql] object DataSourceV2Strategy extends Logging {
       None
     case in: InSubqueryExec if in.values().exists(_.isEmpty) =>
       Some(new AlwaysFalse())
-    case in @ InSubqueryExec(PushableColumnAndNestedColumn(name), _, _, _, _, _) =>
+    case in: InSubqueryExec =>
       val values = in.values().getOrElse {
         throw SparkException.internalError(
           s"Can't translate $in to v2 Predicate, no subquery result")
       }
-      val literals = values.map(LiteralValue(_, in.child.dataType))
-      Some(new Predicate("IN", FieldReference(name) +: literals))
-
+      // Type coercion of the join keys may wrap the pruning key in a cast, e.g.
+      // `cast(part_col as bigint) IN (...)` when an INT partition column joins a BIGINT key.
+      // The optimizer can't unwrap it as the values are only known now, so unwrap it here with
+      // the same rule the optimizer applies to `InSet` with literal values.
+      val inSet = InSet(in.child, values.toSet)
+      UnwrapCastInBinaryComparison.unwrapCast(inSet).getOrElse(inSet) match {
+        case InSet(col @ PushableColumnAndNestedColumn(name), hset) =>
+          val literals = hset.toArray.map(LiteralValue(_, col.dataType))
+          Some(new Predicate("IN", FieldReference(name) +: literals))
+        // The rule rewrites the filter to `if(isnull(col), null, false)` when none of the values
+        // is representable in the column type, so no row can match.
+        case And(IsNull(_), Literal(null, BooleanType)) =>
+          Some(new AlwaysFalse())
+        case _ =>
+          unsupportedRuntimeFilter(in)
+      }
     case other =>
-      logWarning(log"Can't translate ${MDC(EXPR, other)} to source filter, unsupported expression")
-      None
+      unsupportedRuntimeFilter(other)
+  }
+
+  private def unsupportedRuntimeFilter(expr: Expression): Option[Predicate] = {
+    logWarning(log"Can't translate ${MDC(EXPR, expr)} to source filter, unsupported expression")
+    None
   }
 
   /**
