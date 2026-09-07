@@ -782,7 +782,8 @@ case class EnsureRequirements(
   // Similar to `OptimizeSkewedJoin.canSplitLeftSide`
   private def canReplicateRightSide(joinType: JoinType): Boolean = {
     joinType == Inner || joinType == Cross || joinType == LeftSemi ||
-        joinType == LeftAnti || joinType == LeftOuter
+        joinType == LeftAnti || joinType == LeftOuter || joinType == LeftSingle ||
+        joinType.isInstanceOf[ExistenceJoin]
   }
 
   /**

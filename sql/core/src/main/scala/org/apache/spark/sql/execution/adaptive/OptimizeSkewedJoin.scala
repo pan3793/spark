@@ -82,11 +82,16 @@ case class OptimizeSkewedJoin(ensureRequirements: EnsureRequirements)
     }
   }
 
+  // Safe for any join that keeps no unmatched right row: each left row still lands in one task
+  // that sees every right row for its key.
   private def canSplitLeftSide(joinType: JoinType) = {
     joinType == Inner || joinType == Cross || joinType == LeftSemi ||
-      joinType == LeftAnti || joinType == LeftOuter
+      joinType == LeftAnti || joinType == LeftOuter || joinType == LeftSingle ||
+      joinType.isInstanceOf[ExistenceJoin]
   }
 
+  // Safe for any join that keeps no unmatched left row: each right row still lands in one task
+  // that sees every left row for its key.
   private def canSplitRightSide(joinType: JoinType) = {
     joinType == Inner || joinType == Cross || joinType == RightOuter
   }

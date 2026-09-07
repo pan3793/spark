@@ -3910,6 +3910,72 @@ class KeyGroupedPartitioningSuite
     }
   }
 
+  test("SPARK-59294: partially clustered distribution with existence join and left single join") {
+    createTable(items, itemsColumns, Array(bucket(8, "id")))
+    sql(s"INSERT INTO testcat.ns.$items VALUES " +
+        s"(0, 'aa', 38.0, cast('2020-01-01' as timestamp)), " +
+        s"(1, 'bb', 39.0, cast('2020-01-02' as timestamp)), " +
+        s"(4, 'cc', 40.0, cast('2020-01-02' as timestamp)), " +
+        s"(4, 'dd', 41.0, cast('2020-01-03' as timestamp)), " +
+        s"(4, 'ee', 42.0, cast('2020-01-04' as timestamp))")
+
+    createTable(purchases, purchasesColumns, Array(bucket(8, "item_id")))
+    sql(s"INSERT INTO testcat.ns.$purchases VALUES " +
+        s"(4, 42.0, cast('2020-01-01' as timestamp)), " +
+        s"(5, 44.0, cast('2020-01-15' as timestamp))")
+
+    val existence = (
+      s"""
+         |SELECT id, name FROM testcat.ns.$items i
+         |WHERE EXISTS (SELECT /*+ MERGE(p) */ 1 FROM testcat.ns.$purchases p
+         |              WHERE i.id = p.item_id)
+         |   OR i.name = 'bb'
+         |""".stripMargin,
+      (joinType: JoinType) => joinType.isInstanceOf[ExistenceJoin],
+      Seq(Row(1, "bb"), Row(4, "cc"), Row(4, "dd"), Row(4, "ee")))
+    val leftSingle = (
+      s"""
+         |SELECT id, name,
+         |  (SELECT /*+ SHUFFLE_HASH(p) */ p.price FROM testcat.ns.$purchases p
+         |   WHERE i.id = p.item_id) AS sale_price
+         |FROM testcat.ns.$items i
+         |""".stripMargin,
+      (joinType: JoinType) => joinType == LeftSingle,
+      Seq(Row(0, "aa", null), Row(1, "bb", null), Row(4, "cc", 42.0), Row(4, "dd", 42.0),
+        Row(4, "ee", 42.0)))
+
+    // `items` holds three splits for key 4 and is the larger side, so partially clustered
+    // distribution keeps its splits apart and replicates `purchases` to each of them. Each left
+    // row still lands in one task that sees every right row for its key, which is all these join
+    // types need, so the join runs over five partitions instead of three key groups.
+    Seq(existence, leftSingle).foreach { case (query, isJoinType, expectedRows) =>
+      Seq(("true", 5, true), ("false", 3, false)).foreach {
+        case (partiallyClustered, expectedNumPartitions, expectedLeftDistributed) =>
+          withSQLConf(
+            SQLConf.V2_BUCKETING_PUSH_PART_VALUES_ENABLED.key -> "true",
+            SQLConf.V2_BUCKETING_PARTITION_FILTER_ENABLED.key -> "true",
+            SQLConf.V2_BUCKETING_PARTIALLY_CLUSTERED_DISTRIBUTION_ENABLED.key -> partiallyClustered,
+            SQLConf.SCALAR_SUBQUERY_USE_SINGLE_JOIN.key -> "true") {
+            val df = sql(query)
+            checkAnswer(df, expectedRows)
+
+            val plan = df.queryExecution.executedPlan
+            val joins = collect(plan) { case j: ShuffledJoin if isJoinType(j.joinType) => j }
+            assert(joins.size == 1, s"expected one matching join in\n$plan")
+            assert(collectAllShuffles(joins.head).isEmpty,
+              "should not add shuffle for both sides of the join")
+            val sides = Seq(joins.head.left, joins.head.right).map(collectAllGroupPartitions)
+            val distributed = sides.map(_.map(_.distributePartitions))
+            assert(distributed == Seq(Seq(expectedLeftDistributed), Seq(false)),
+              s"left/right distributePartitions: $distributed")
+            val numPartitions = sides.flatten.map(_.outputPartitioning.numPartitions)
+            assert(numPartitions == Seq(expectedNumPartitions, expectedNumPartitions),
+              s"left/right partitions: $numPartitions")
+          }
+      }
+    }
+  }
+
   test("SPARK-53322: checkpointed scans avoid shuffles for aggregates") {
     withTempDir { dir =>
       spark.sparkContext.setCheckpointDir(dir.getPath)
