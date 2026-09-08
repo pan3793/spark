@@ -109,14 +109,7 @@ object UnwrapCastInBinaryComparison extends Rule[LogicalPlan] {
       }
   }
 
-  /**
-   * Unwraps the cast in a single expression of the patterns listed in the class doc. Returns
-   * None if the expression is not rewritten.
-   *
-   * Besides the rule, this is also called at runtime to unwrap the cast in a dynamic partition
-   * pruning filter, whose values are only known once its subquery has been evaluated.
-   */
-  private[sql] def unwrapCast(exp: Expression): Option[Expression] = exp match {
+  private def unwrapCast(exp: Expression): Option[Expression] = exp match {
     // Not a canonical form. In this case we first canonicalize the expression by swapping the
     // literal and cast side, then process the result and swap the literal and cast again to
     // restore the original order.
@@ -186,19 +179,12 @@ object UnwrapCastInBinaryComparison extends Rule[LogicalPlan] {
       }
       simplifyIn(fromExp, toType, list, buildIn)
 
-    // The same with `In` expression, the analyzer makes sure that the hset of InSet is already of
-    // the same data type, so simply check `fromExp.dataType` can implicitly cast to `toType` and
-    // both `fromExp.dataType` and `toType` is numeric type or not.
-    case InSet(Cast(fromExp, toType: NumericType, _, _), hset)
-      if hset.nonEmpty && canImplicitlyCast(fromExp, toType, toType) =>
-      val buildInSet =
-        (nullList: ArrayBuffer[Literal], canCastList: ArrayBuffer[Literal]) =>
-          InSet(fromExp, (nullList ++ canCastList).map(_.value).toSet)
-      simplifyIn(
-        fromExp,
-        toType,
-        hset.map(v => Literal.create(v, toType)).toSeq,
-        buildInSet)
+    case inSet: InSet =>
+      unwrapCastInSet(inSet).map {
+        // only have cannot cast to fromExp.dataType literals
+        case (fromExp, values) if values.isEmpty => falseIfNotNull(fromExp)
+        case (fromExp, values) => InSet(fromExp, values)
+      }
 
     case _ => None
   }
@@ -424,7 +410,45 @@ object UnwrapCastInBinaryComparison extends Rule[LogicalPlan] {
       toType: NumericType,
       list: Seq[Expression],
       buildExpr: (ArrayBuffer[Literal], ArrayBuffer[Literal]) => IN): Option[Expression] = {
+    val (nullList, canCastList) = castLiterals(fromExp.dataType, toType, list)
+    if (nullList.isEmpty && canCastList.isEmpty) {
+      // only have cannot cast to fromExp.dataType literals
+      Option(falseIfNotNull(fromExp))
+    } else {
+      val unwrapExpr = buildExpr(nullList, canCastList)
+      Option(unwrapExpr)
+    }
+  }
 
+  /**
+   * Unwraps the cast of `InSet(Cast(fromExp, toType), hset)`. Returns `fromExp` and the values
+   * of `hset` converted to its type, dropping the ones that don't survive the round trip (see
+   * `castLiterals`), so the set is empty when no row can match. Returns None if the cast can't
+   * be unwrapped.
+   *
+   * Besides the rule, this is also used at runtime to unwrap the cast of a dynamic partition
+   * pruning filter, whose values are only known once its subquery has been evaluated.
+   */
+  private[sql] def unwrapCastInSet(inSet: InSet): Option[(Expression, Set[Any])] = inSet match {
+    // The same with `In` expression, the analyzer makes sure that the hset of InSet is already of
+    // the same data type, so simply check `fromExp.dataType` can implicitly cast to `toType` and
+    // both `fromExp.dataType` and `toType` is numeric type or not.
+    case InSet(Cast(fromExp, toType: NumericType, _, _), hset)
+        if hset.nonEmpty && canImplicitlyCast(fromExp, toType, toType) =>
+      val (nullList, canCastList) =
+        castLiterals(fromExp.dataType, toType, hset.map(v => Literal.create(v, toType)).toSeq)
+      Some((fromExp, (nullList ++ canCastList).map(_.value).toSet))
+    case _ => None
+  }
+
+  /**
+   * Casts the literals of an `In`/`InSet` list from `toType` to `fromType`. Returns the null
+   * literals and the literals that can be cast, the others are dropped as explained below.
+   */
+  private def castLiterals(
+      fromType: DataType,
+      toType: NumericType,
+      list: Seq[Expression]): (ArrayBuffer[Literal], ArrayBuffer[Literal]) = {
     // There are 3 kinds of literals in the list:
     // 1. null literals
     // 2. The literals that can cast to fromExp.dataType
@@ -442,7 +466,6 @@ object UnwrapCastInBinaryComparison extends Rule[LogicalPlan] {
     //     note that 3.14 will be rounded to 3.14000010... after casting to float
 
     val (nullList, canCastList) = (ArrayBuffer[Literal](), ArrayBuffer[Literal]())
-    val fromType = fromExp.dataType
     val ordering = PhysicalDataType.ordering(toType)
 
     list.foreach {
@@ -454,14 +477,7 @@ object UnwrapCastInBinaryComparison extends Rule[LogicalPlan] {
           canCastList += Literal(newValue, fromType)
         }
     }
-
-    if (nullList.isEmpty && canCastList.isEmpty) {
-      // only have cannot cast to fromExp.dataType literals
-      Option(falseIfNotNull(fromExp))
-    } else {
-      val unwrapExpr = buildExpr(nullList, canCastList)
-      Option(unwrapExpr)
-    }
+    (nullList, canCastList)
   }
 
 

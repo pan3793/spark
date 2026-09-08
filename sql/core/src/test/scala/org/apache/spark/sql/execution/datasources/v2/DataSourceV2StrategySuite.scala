@@ -1070,6 +1070,11 @@ class DataSourceV2StrategySuite extends SharedSparkSession {
       checkRuntimeFilter(runtimeFilter(attr, Array[Any](1, 2)), name,
         Set(LiteralValue(1, IntegerType), LiteralValue(2, IntegerType)))
     }
+    // the values are pushed as given
+    val predicate = DataSourceV2Strategy.translateRuntimeFilterV2(
+      runtimeFilter($"cint".int, Array[Any](2, 1, 2))).get
+    assert(predicate.children().toSeq == Seq(FieldReference("cint"),
+      LiteralValue(2, IntegerType), LiteralValue(1, IntegerType), LiteralValue(2, IntegerType)))
     // no subquery result, so no row can match
     assert(DataSourceV2Strategy.translateRuntimeFilterV2(
       runtimeFilter($"cint".int, Array.empty[Any])).contains(new AlwaysFalse()))
