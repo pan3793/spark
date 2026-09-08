@@ -82,16 +82,19 @@ case class OptimizeSkewedJoin(ensureRequirements: EnsureRequirements)
     }
   }
 
-  // Safe for any join that keeps no unmatched right row: each left row still lands in one task
-  // that sees every right row for its key.
-  private def canSplitLeftSide(joinType: JoinType) = {
-    joinType == Inner || joinType == Cross || joinType == LeftSemi ||
-      joinType == LeftAnti || joinType == LeftOuter || joinType == LeftSingle ||
-      joinType.isInstanceOf[ExistenceJoin]
+  // Splitting the left replicates the right partition to every left split, so it is safe only
+  // when no output row comes from a right row alone. Every join that drops unmatched right rows
+  // qualifies: its output is one row per left row or one per matching pair, and each left row
+  // still lands in exactly one split.
+  private def canSplitLeftSide(joinType: JoinType) = joinType match {
+    case _: InnerLike | LeftOuter | LeftSingle | LeftExistence(_) => true
+    case _ => false
   }
 
-  // Safe for any join that keeps no unmatched left row: each right row still lands in one task
-  // that sees every left row for its key.
+  // Splitting the right replicates the left partition to every right split, so it is safe only
+  // when every output row is tied to one right row. The left-preserving joins are out for that
+  // reason, and so is LeftSemi: it drops unmatched left rows yet emits one row per left row, so
+  // a left row matching in two right splits would come out twice.
   private def canSplitRightSide(joinType: JoinType) = {
     joinType == Inner || joinType == Cross || joinType == RightOuter
   }

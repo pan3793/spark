@@ -692,7 +692,7 @@ case class EnsureRequirements(
 
             // Similar to skewed join, we need to check the join type to see whether replication
             // of partitions can be applied. For instance, replication should not be allowed for
-            // the left-hand side of a right outer join.
+            // the left-hand side of a left outer join.
             if (replicateLeftSide && !canReplicateLeft) {
               logInfo(log"Left-hand side is picked but cannot be applied to join type " +
                 log"'${MDC(LogKeys.JOIN_TYPE, joinType)}'. Skipping partially clustered " +
@@ -774,16 +774,17 @@ case class EnsureRequirements(
     }
   }
 
-  // Similar to `OptimizeSkewedJoin.canSplitRightSide`
+  // Similar to `OptimizeSkewedJoin.canSplitRightSide`: replicating the left side over the right
+  // side's splits is safe only when every output row is tied to one right row.
   private def canReplicateLeftSide(joinType: JoinType): Boolean = {
     joinType == Inner || joinType == Cross || joinType == RightOuter
   }
 
-  // Similar to `OptimizeSkewedJoin.canSplitLeftSide`
-  private def canReplicateRightSide(joinType: JoinType): Boolean = {
-    joinType == Inner || joinType == Cross || joinType == LeftSemi ||
-        joinType == LeftAnti || joinType == LeftOuter || joinType == LeftSingle ||
-        joinType.isInstanceOf[ExistenceJoin]
+  // Similar to `OptimizeSkewedJoin.canSplitLeftSide`: replicating the right side over the left
+  // side's splits is safe only when no output row comes from a right row alone.
+  private def canReplicateRightSide(joinType: JoinType): Boolean = joinType match {
+    case _: InnerLike | LeftOuter | LeftSingle | LeftExistence(_) => true
+    case _ => false
   }
 
   /**
