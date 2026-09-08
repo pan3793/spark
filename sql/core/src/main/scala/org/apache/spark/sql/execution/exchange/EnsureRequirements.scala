@@ -30,7 +30,7 @@ import org.apache.spark.sql.catalyst.util.InternalRowComparableWrapper
 import org.apache.spark.sql.errors.QueryExecutionErrors
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.datasources.v2.GroupPartitionsExec
-import org.apache.spark.sql.execution.joins.{ShuffledHashJoinExec, SortMergeJoinExec}
+import org.apache.spark.sql.execution.joins.{ShuffledHashJoinExec, ShuffledJoin, SortMergeJoinExec}
 import org.apache.spark.sql.internal.SQLConf
 
 /**
@@ -639,8 +639,8 @@ case class EnsureRequirements(
           // optimization cannot be applied to a left outer join, where the left hand
           // side is chosen as the side to replicate partitions according to stats.
           // Otherwise, query result could be incorrect.
-          val canReplicateLeft = canReplicateLeftSide(joinType)
-          val canReplicateRight = canReplicateRightSide(joinType)
+          val canReplicateLeft = ShuffledJoin.canDuplicateLeftSide(joinType)
+          val canReplicateRight = ShuffledJoin.canDuplicateRightSide(joinType)
 
           if (!canReplicateLeft && !canReplicateRight) {
             logInfo(log"Skipping partially clustered distribution as it cannot be applied for " +
@@ -772,19 +772,6 @@ case class EnsureRequirements(
       case _ =>
         false
     }
-  }
-
-  // Similar to `OptimizeSkewedJoin.canSplitRightSide`: replicating the left side over the right
-  // side's splits is safe only when every output row is tied to one right row.
-  private def canReplicateLeftSide(joinType: JoinType): Boolean = {
-    joinType == Inner || joinType == Cross || joinType == RightOuter
-  }
-
-  // Similar to `OptimizeSkewedJoin.canSplitLeftSide`: replicating the right side over the left
-  // side's splits is safe only when no output row comes from a right row alone.
-  private def canReplicateRightSide(joinType: JoinType): Boolean = joinType match {
-    case _: InnerLike | LeftOuter | LeftSingle | LeftExistence(_) => true
-    case _ => false
   }
 
   /**

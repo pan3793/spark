@@ -29,7 +29,7 @@ import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.exchange.{ENSURE_REQUIREMENTS, EnsureRequirements, ValidateRequirements}
-import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, ShuffledHashJoinExec, SortMergeJoinExec}
+import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, ShuffledHashJoinExec, ShuffledJoin, SortMergeJoinExec}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.util.Utils
 
@@ -82,23 +82,6 @@ case class OptimizeSkewedJoin(ensureRequirements: EnsureRequirements)
     }
   }
 
-  // Splitting the left replicates the right partition to every left split, so it is safe only
-  // when no output row comes from a right row alone. Every join that drops unmatched right rows
-  // qualifies: its output is one row per left row or one per matching pair, and each left row
-  // still lands in exactly one split.
-  private def canSplitLeftSide(joinType: JoinType) = joinType match {
-    case _: InnerLike | LeftOuter | LeftSingle | LeftExistence(_) => true
-    case _ => false
-  }
-
-  // Splitting the right replicates the left partition to every right split, so it is safe only
-  // when every output row is tied to one right row. The left-preserving joins are out for that
-  // reason, and so is LeftSemi: it drops unmatched left rows yet emits one row per left row, so
-  // a left row matching in two right splits would come out twice.
-  private def canSplitRightSide(joinType: JoinType) = {
-    joinType == Inner || joinType == Cross || joinType == RightOuter
-  }
-
   private def getSizeInfo(medianSize: Long, sizes: Array[Long]): String = {
     s"median size: $medianSize, max size: ${sizes.max}, min size: ${sizes.min}, avg size: " +
       sizes.sum / sizes.length
@@ -120,8 +103,9 @@ case class OptimizeSkewedJoin(ensureRequirements: EnsureRequirements)
       left: ShuffleQueryStageExec,
       right: ShuffleQueryStageExec,
       joinType: JoinType): Option[(SparkPlan, SparkPlan)] = {
-    val canSplitLeft = canSplitLeftSide(joinType)
-    val canSplitRight = canSplitRightSide(joinType)
+    // Splitting a side replicates the other side's partition to every split.
+    val canSplitLeft = ShuffledJoin.canDuplicateRightSide(joinType)
+    val canSplitRight = ShuffledJoin.canDuplicateLeftSide(joinType)
     if (!canSplitLeft && !canSplitRight) return None
 
     val leftSizes = left.mapStats.get.bytesByPartitionId
