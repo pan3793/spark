@@ -169,15 +169,16 @@ object UnwrapCastInBinaryComparison extends Rule[LogicalPlan] {
     // 3. this rule doesn't optimize In when `in.list` contains an expression that is not literal.
     case in @ In(Cast(fromExp, toType: NumericType, tz, mode), list @ Seq(firstLit, _*))
       if canImplicitlyCast(fromExp, toType, firstLit.dataType) && in.inSetConvertible =>
-
-      val buildIn = {
-        (nullList: ArrayBuffer[Literal], canCastList: ArrayBuffer[Literal]) =>
-          // cast null value to fromExp.dataType, to make sure the new return list is in the same
-          // data type.
-          val newList = nullList.map(lit => Cast(lit, fromExp.dataType, tz, mode)) ++ canCastList
-          In(fromExp, newList.toSeq)
+      val (nullList, canCastList) = castLiterals(fromExp.dataType, toType, list)
+      if (nullList.isEmpty && canCastList.isEmpty) {
+        // only have cannot cast to fromExp.dataType literals
+        Some(falseIfNotNull(fromExp))
+      } else {
+        // cast null value to fromExp.dataType, to make sure the new return list is in the same
+        // data type.
+        val newList = nullList.map(lit => Cast(lit, fromExp.dataType, tz, mode)) ++ canCastList
+        Some(In(fromExp, newList.toSeq))
       }
-      simplifyIn(fromExp, toType, list, buildIn)
 
     case inSet: InSet =>
       unwrapCastInSet(inSet).map {
@@ -402,21 +403,6 @@ object UnwrapCastInBinaryComparison extends Rule[LogicalPlan] {
           FalseLiteral
         }
       case _ => exp
-    }
-  }
-
-  private def simplifyIn[IN <: Expression](
-      fromExp: Expression,
-      toType: NumericType,
-      list: Seq[Expression],
-      buildExpr: (ArrayBuffer[Literal], ArrayBuffer[Literal]) => IN): Option[Expression] = {
-    val (nullList, canCastList) = castLiterals(fromExp.dataType, toType, list)
-    if (nullList.isEmpty && canCastList.isEmpty) {
-      // only have cannot cast to fromExp.dataType literals
-      Option(falseIfNotNull(fromExp))
-    } else {
-      val unwrapExpr = buildExpr(nullList, canCastList)
-      Option(unwrapExpr)
     }
   }
 
